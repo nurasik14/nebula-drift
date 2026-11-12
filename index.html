@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Nebula Drift</title>
+<script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+<style>
+  :root {
+    --bg: #07041a;
+    --ink: #eae6ff;
+    --dim: #8f88b8;
+    --cyan: #3ff3ff;
+    --pink: #ff3fa4;
+    --gold: #ffd23f;
+    --violet: #a46bff;
+    --red: #ff4559;
+    /* Telegram sets these vars itself (Bot API 8.0+); 0px fallback in a browser */
+    --top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+    --bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px));
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font: 600 15px/1.3 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select: none; -webkit-user-select: none; touch-action: none; overscroll-behavior: none;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* HUD */
+  #hud {
+    position: fixed; left: 0; right: 0; top: 0; padding: calc(var(--top) + 12px) 16px 0;
+    display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none;
+    opacity: 0; transition: opacity .3s;
+  }
+  body.playing #hud { opacity: 1; }
+  #score { font-size: 34px; font-weight: 800; letter-spacing: 1px; text-shadow: 0 0 18px var(--cyan); font-variant-numeric: tabular-nums; }
+  #combo { font-size: 13px; color: var(--gold); text-shadow: 0 0 10px var(--gold); height: 16px; transition: transform .1s; }
+  #lives { font-size: 20px; letter-spacing: 3px; text-align: right; }
+  #level { font-size: 12px; color: var(--dim); text-align: right; margin-top: 2px; }
+  #buffs { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+  .buff { font-size: 11px; padding: 2px 7px; border-radius: 99px; border: 1px solid currentColor; }
+
+  #pulse {
+    position: fixed; right: 18px; bottom: calc(var(--bottom) + 22px); width: 74px; height: 74px; border-radius: 50%;
+    border: 0; background: radial-gradient(circle, #ff3fa455, #ff3fa411 70%); color: var(--ink);
+    font-family: inherit; font-weight: 800; font-size: 12px; letter-spacing: 1px; display: none; touch-action: manipulation;
+  }
+  body.playing #pulse { display: block; }
+  #pulse svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  #pulse.ready { animation: throb 1.2s infinite; }
+  @keyframes throb { 50% { box-shadow: 0 0 28px var(--pink); } }
+
+  #banner {
+    position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 40px; font-weight: 900;
+    letter-spacing: 4px; pointer-events: none; opacity: 0; transform: scale(.6);
+    background: linear-gradient(90deg, var(--cyan), var(--pink), var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 12px #ff3fa488);
+  }
+  #banner.show { animation: pop 1.4s ease-out forwards; }
+  @keyframes pop { 15% { opacity: 1; transform: scale(1.08); } 30% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: scale(1.3); } }
+
+  /* Menus */
+  .screen {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: calc(var(--top) + 20px) 24px calc(var(--bottom) + 24px); text-align: center; gap: 14px;
+    transition: opacity .35s, transform .35s;
+  }
+  .screen.hidden { opacity: 0; transform: scale(1.04); pointer-events: none; }
+  h1 {
+    margin: 0; font-size: 46px; line-height: .95; font-weight: 900; letter-spacing: 2px;
+    background: linear-gradient(120deg, var(--cyan) 10%, var(--violet) 50%, var(--pink) 90%);
+    -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 22px #7a4bff66);
+    animation: float 4s ease-in-out infinite;
+  }
+  @keyframes float { 50% { transform: translateY(-6px); } }
+  .sub { color: var(--dim); font-size: 14px; max-width: 300px; }
+  .card {
+    background: #ffffff0d; border: 1px solid #ffffff1a; border-radius: 18px; padding: 12px 16px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); width: min(320px, 100%);
+  }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .stats b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .stats span { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .legend { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; text-align: left; font-size: 13px; font-weight: 500; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 1px; }
+  .btn {
+    border: 0; border-radius: 14px; padding: 14px 22px; font-family: inherit; font-weight: 800; font-size: 16px; line-height: 1; letter-spacing: 1px; color: #07041a;
+    background: linear-gradient(90deg, var(--cyan), var(--pink)); box-shadow: 0 0 24px #ff3fa455; width: min(320px, 100%);
+  }
+  .btn.ghost { background: #ffffff12; color: var(--ink); box-shadow: none; font-size: 13px; padding: 11px; }
+  body.tg .btn.browser-only { display: none; } /* inside Telegram the native bottom buttons replace these */
+  .row { display: flex; gap: 8px; width: min(320px, 100%); }
+  .row .btn { flex: 1; }
+  #final { font-size: 64px; font-weight: 900; text-shadow: 0 0 30px var(--pink); font-variant-numeric: tabular-nums; }
+  #newbest { color: var(--gold); text-shadow: 0 0 12px var(--gold); font-size: 14px; letter-spacing: 3px; min-height: 18px; }
+  #caps { font-size: 11px; font-weight: 500; color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 340px; }
+  #caps i { font-style: normal; padding: 2px 7px; border-radius: 99px; background: #ffffff0d; }
+  #caps i.on { color: var(--cyan); background: #3ff3ff14; }
+  #pausedScreen, #over { background: #07041ab3; backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div><div id="score">0</div><div id="combo"></div></div>
+  <div><div id="lives"></div><div id="level">LEVEL 1</div><div id="buffs"></div></div>
+</div>
+<button id="pulse" aria-label="Pulse"><svg viewBox="0 0 74 74"><circle cx="37" cy="37" r="34" fill="none" stroke="#ff3fa4" stroke-width="4" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="0" id="pulseRing"/></svg>PULSE</button>
+<div id="banner"></div>
+
+<section class="screen" id="menu">
+  <h1>NEBULA<br>DRIFT</h1>
+  <div class="sub" id="hello">Steer your orb through the nebula. Grab shards, chain combos, dodge mines.</div>
+  <div class="card stats">
+    <div><b id="mBest">0</b><span>Best</span></div>
+    <div><b id="mGames">0</b><span>Games</span></div>
+    <div><b id="mStreak">0</b><span>Day streak</span></div>
+  </div>
+  <div class="card legend">
+    <div class="dot" style="background:var(--cyan);box-shadow:0 0 10px var(--cyan)"></div><div>Shard: points, chain them for a combo</div>
+    <div class="dot" style="background:var(--red);box-shadow:0 0 10px var(--red)"></div><div>Mine: costs a life</div>
+    <div class="dot" style="background:#4d8bff;box-shadow:0 0 10px #4d8bff"></div><div>Shield: blocks one hit</div>
+    <div class="dot" style="background:var(--gold);box-shadow:0 0 10px var(--gold)"></div><div>Magnet: pulls in shards</div>
+    <div class="dot" style="background:var(--violet);box-shadow:0 0 10px var(--violet)"></div><div>Chrono: slows time</div>
+    <div class="dot" style="background:var(--pink);box-shadow:0 0 10px var(--pink)"></div><div>PULSE: blasts nearby mines</div>
+  </div>
+  <button class="btn browser-only" id="bPlay">PLAY</button>
+  <div class="row">
+    <button class="btn ghost" id="bControl">Control: Drag</button>
+    <button class="btn ghost" id="bFull">Fullscreen</button>
+  </div>
+  <div id="caps"></div>
+</section>
+
+<section class="screen hidden" id="over">
+  <div class="sub">FINAL SCORE</div>
+  <div id="final">0</div>
+  <div id="newbest"></div>
+  <div class="card stats">
+    <div><b id="oShards">0</b><span>Shards</span></div>
+    <div><b id="oCombo">0</b><span>Max combo</span></div>
+    <div><b id="oLevel">1</b><span>Level</span></div>
+  </div>
+  <button class="btn browser-only" id="bAgain">PLAY AGAIN</button>
+  <div class="row">
+    <button class="btn ghost" id="bShare">Share score</button>
+    <button class="btn ghost" id="bHome">Menu</button>
+  </div>
+</section>
+
+<section class="screen hidden" id="pausedScreen">
+  <h1 style="font-size:38px">PAUSED</h1>
+  <button class="btn" id="bResume">RESUME</button>
+  <button class="btn ghost" id="bQuit">Quit to menu</button>
+</section>
+
+<script>
+"use strict";
+/* ============================================================
+   Telegram layer: every Mini App API is feature-checked, so the
+   same file runs in any Telegram client and in a plain browser.
+   ============================================================ */
+const tg = window.Telegram && window.Telegram.WebApp;
+const inTG = !!(tg && tg.initData !== undefined && tg.platform !== "unknown");
+const ver = v => inTG && tg.isVersionAtLeast(v);
+const safe = (fn, ...a) => { try { return fn(...a); } catch (e) { console.warn("[tg]", e.message); } };
+const caps = {};
+
+const haptic = {
+  impact: s => ver("6.1") && safe(() => tg.HapticFeedback.impactOccurred(s)),
+  note: t => ver("6.1") && safe(() => tg.HapticFeedback.notificationOccurred(t)),
+  tick: () => ver("6.1") && safe(() => tg.HapticFeedback.selectionChanged()),
+};
+
+// Storage: CloudStorage (synced across the user's devices) for scores,
+// DeviceStorage (Bot API 9.0, local) for settings; localStorage as fallback.
+const store = {
+  cloud: ver("6.9") ? tg.CloudStorage : null,
+  device: ver("9.0") && tg.DeviceStorage ? tg.DeviceStorage : null,
+  get(key, local = false) {
+    const s = local ? this.device : this.cloud;
+    return new Promise(res => {
+      if (!s) return res(localStorage.getItem("nd_" + key));
+      safe(() => s.getItem(key, (err, v) => res(err ? localStorage.getItem("nd_" + key) : v)));
+    });
+  },
+  set(key, val, local = false) {
+    val = String(val);
+    localStorage.setItem("nd_" + key, val);
+    const s = local ? this.device : this.cloud;
+    if (s) safe(() => s.setItem(key, val, () => {}));
+  },
+};
+
+const COLORS = { bg: "#07041a" };
+// After registering the app with @BotFather (/newapp), put its direct link here so shares open the game.
+const APP_LINK = ""; // e.g. "https://t.me/YourBot/drift"
+
+function setupTelegram() {
+  document.body.classList.toggle("tg", inTG);
+  if (!inTG) return;
+  tg.ready();
+  tg.expand();
+  if (ver("6.1")) { safe(() => tg.setHeaderColor(COLORS.bg)); safe(() => tg.setBackgroundColor(COLORS.bg)); }
+  if (ver("7.10")) safe(() => tg.setBottomBarColor(COLORS.bg));
+  if (ver("7.7")) safe(() => tg.disableVerticalSwipes()); // no accidental minimise while steering
+
+  const user = tg.initDataUnsafe && tg.initDataUnsafe.user;
+  if (user) document.getElementById("hello").textContent =
+    `Ready, ${user.first_name}? Grab shards, chain combos, dodge mines.`;
+
+  // Native bottom buttons
+  tg.MainButton.setParams({ text: "PLAY", color: "#ff3fa4", text_color: "#ffffff", is_visible: true,
+    ...(ver("7.10") ? { has_shine_effect: true } : {}) });
+  tg.MainButton.onClick(() => { if (state === "menu" || state === "over") startGame(); });
+  if (ver("7.10")) tg.SecondaryButton.onClick(() => { if (state === "over") shareScore(); else toggleControl(); });
+
+  // BackButton = pause / back to menu
+  if (ver("6.1")) tg.BackButton.onClick(() => {
+    if (state === "playing") pauseGame(); else if (state === "paused" || state === "over") toMenu();
+  });
+
+  // Settings button in the "..." menu
+  if (ver("6.10")) {
+    tg.SettingsButton.show();
+    tg.SettingsButton.onClick(openSettings);
+  }
+
+  // Lifecycle: app minimised / swiped away -> auto-pause (8.0)
+  tg.onEvent("deactivated", () => { if (state === "playing") pauseGame(); });
+  tg.onEvent("fullscreenChanged", syncFullBtn);
+  tg.onEvent("fullscreenFailed", e => tg.showAlert("Fullscreen unavailable: " + (e && e.error)));
+  tg.onEvent("themeChanged", () => {}); // our palette is fixed-dark on purpose
+  tg.onEvent("viewportChanged", resize);
+  tg.onEvent("safeAreaChanged", resize);
+  tg.onEvent("contentSafeAreaChanged", resize);
+  tg.onEvent("homeScreenAdded", () => haptic.note("success"));
+}
+
+function detectCaps() {
+  const list = [
+    ["Haptics", "6.1"], ["CloudStorage", "6.9"], ["Settings", "6.10"], ["Swipe lock", "7.7"],
+    ["2nd button", "7.10"], ["Fullscreen", "8.0"], ["Tilt", "8.0"], ["Home screen", "8.0"],
+    ["Orientation lock", "8.0"], ["DeviceStorage", "9.0"], ["Hide keyboard", "9.1"],
+  ];
+  const el = document.getElementById("caps");
+  el.innerHTML = (inTG ? `<i class="on">Telegram ${tg.platform} · API ${tg.version}</i>` : `<i>Browser mode</i>`) +
+    list.map(([n, v]) => { caps[n] = ver(v); return `<i class="${caps[n] ? "on" : ""}">${n}</i>`; }).join("");
+}
+
+function setBottomButtons() {
+  if (!inTG) return;
+  const sec = ver("7.10") ? tg.SecondaryButton : null;
+  if (state === "playing" || state === "paused") {
+    tg.MainButton.hide(); sec && sec.hide();
+    ver("6.1") && tg.BackButton.show();
+    ver("6.2") && tg.enableClosingConfirmation();
+    return;
+  }
+  ver("6.2") && tg.disableClosingConfirmation();
+  tg.MainButton.setText(state === "over" ? "PLAY AGAIN" : "PLAY");
+  tg.MainButton.show();
+  if (sec) {
+    sec.setParams({ text: state === "over" ? "Share" : `Control: ${settings.control}`, is_visible: true, position: "left",
+      color: "#1c1440", text_color: "#eae6ff" });
+  }
+  state === "over" ? tg.BackButton.show() : tg.BackButton.hide();
+}
+
+/* ---------------- settings ---------------- */
+const settings = { control: "Drag", haptics: true };
+function toggleControl() {
+  if (settings.control === "Drag" && !caps["Tilt"]) {
+    inTG ? tg.showAlert("Tilt needs Telegram 8.0+ on a phone.") : alert("Tilt control works inside Telegram on a phone.");
+    return;
+  }
+  settings.control = settings.control === "Drag" ? "Tilt" : "Drag";
+  store.set("control", settings.control, true);
+  haptic.tick();
+  document.getElementById("bControl").textContent = "Control: " + settings.control;
+  setBottomButtons();
+}
+function openSettings() {
+  tg.showPopup({
+    title: "Settings",
+    message: `Control: ${settings.control}\nHaptics: ${settings.haptics ? "on" : "off"}`,
+    buttons: [
+      { id: "ctrl", type: "default", text: "Switch control" },
+      { id: "hap", type: "default", text: settings.haptics ? "Haptics off" : "Haptics on" },
+      { id: "reset", type: "destructive", text: "Reset scores" },
+    ],
+  }, id => {
+    if (id === "ctrl") toggleControl();
+    if (id === "hap") { settings.haptics = !settings.haptics; store.set("haptics", settings.haptics ? 1 : 0, true); }
+    if (id === "reset") tg.showConfirm("Erase best score and stats?", ok => {
+      if (!ok) return;
+      ["best", "games", "streak", "lastDay"].forEach(k => store.set(k, 0));
+      Object.assign(profile, { best: 0, games: 0, streak: 0 }); renderMenu();
+      haptic.note("warning");
+    });
+  });
+}
+
+/* ---------------- fullscreen + orientation ---------------- */
+function syncFullBtn() {
+  const on = inTG ? tg.isFullscreen : !!document.fullscreenElement;
+  document.getElementById("bFull").textContent = on ? "Exit fullscreen" : "Fullscreen";
+  setTimeout(resize, 50);
+}
+document.getElementById("bFull").onclick = () => {
+  haptic.impact("light");
+  if (caps["Fullscreen"]) {
+    if (tg.isFullscreen) tg.exitFullscreen();
+    else { tg.requestFullscreen(); caps["Orientation lock"] && safe(() => tg.lockOrientation()); }
+  } else if (!inTG) {
+    document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+    setTimeout(syncFullBtn, 200);
+  } else tg.showAlert("Fullscreen needs a newer Telegram app.");
+};
+document.getElementById("bControl").onclick = toggleControl;
+
+/* ---------------- profile (best / games / daily streak) ---------------- */
+const profile = { best: 0, games: 0, streak: 0, lastDay: "" };
+const today = () => new Date().toISOString().slice(0, 10);
+async function loadProfile() {
+  const [best, games, streak, lastDay, control, hap] = await Promise.all([
+    store.get("best"), store.get("games"), store.get("streak"), store.get("lastDay"),
+    store.get("control", true), store.get("haptics", true),
+  ]);
+  Object.assign(profile, { best: +best || 0, games: +games || 0, streak: +streak || 0, lastDay: lastDay || "" });
+  if (control === "Tilt" && caps["Tilt"]) settings.control = "Tilt";
+  if (hap === "0") settings.haptics = false;
+  document.getElementById("bControl").textContent = "Control: " + settings.control;
+  renderMenu(); setBottomButtons();
+}
+function bumpStreak() {
+  const t = today();
+  if (profile.lastDay === t) return;
+  const y = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  profile.streak = profile.lastDay === y ? profile.streak + 1 : 1;
+  profile.lastDay = t;
+  store.set("streak", profile.streak); store.set("lastDay", t);
+}
+function renderMenu() {
+  document.getElementById("mBest").textContent = profile.best;
+  document.getElementById("mGames").textContent = profile.games;
+  document.getElementById("mStreak").textContent = profile.streak;
+}
+
+/* ============================================================
+   Game
+   ============================================================ */
+const cv = document.getElementById("c"), cx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+addEventListener("resize", resize);
+resize();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+const TYPES = {
+  shard:  { r: 8,  color: "#3ff3ff" },
+  mine:   { r: 13, color: "#ff4559" },
+  shield: { r: 11, color: "#4d8bff" },
+  magnet: { r: 11, color: "#ffd23f" },
+  chrono: { r: 11, color: "#a46bff" },
+};
+
+let state = "menu";
+let player, ents, parts, rings, stars, target;
+let score = 0, lives = 3, level = 1, combo = 0, comboT = 0, maxCombo = 0, shards = 0,
+    spawnT = 0, t0 = 0, shake = 0, pulseCd = 0, buffs = {}, flash = 0;
+const PULSE_CD = 6;
+
+stars = Array.from({ length: 140 }, () => ({ x: Math.random(), y: Math.random(), z: rand(.2, 1), tw: rand(0, 6.28) }));
+
+function reset() {
+  player = { x: W / 2, y: H * .65, vx: 0, vy: 0, r: 12, trail: [], inv: 0 };
+  target = { x: player.x, y: player.y };
+  ents = []; parts = []; rings = [];
+  score = 0; lives = 3; level = 1; combo = 0; comboT = 0; maxCombo = 0; shards = 0;
+  spawnT = 0; t0 = 0; shake = 0; pulseCd = 0; flash = 0;
+  buffs = { shield: 0, magnet: 0, chrono: 0 };
+}
+
+function startGame() {
+  reset();
+  state = "playing";
+  show(null);
+  document.body.classList.add("playing");
+  setBottomButtons();
+  if (inTG && ver("9.1")) safe(() => tg.hideKeyboard());
+  if (settings.control === "Tilt" && caps["Tilt"]) startTilt();
+  haptic.impact("medium");
+  banner("GO!");
+  updateHud();
+}
+
+function endGame() {
+  state = "over";
+  document.body.classList.remove("playing");
+  stopTilt();
+  haptic.note("error");
+  profile.games++; store.set("games", profile.games);
+  bumpStreak();
+  const isBest = score > profile.best;
+  if (isBest) { profile.best = score; store.set("best", score); setTimeout(() => haptic.note("success"), 350); }
+  document.getElementById("final").textContent = score;
+  document.getElementById("newbest").textContent = isBest && score > 0 ? "★ NEW BEST ★" : `BEST ${profile.best}`;
+  document.getElementById("oShards").textContent = shards;
+  document.getElementById("oCombo").textContent = "x" + maxCombo;
+  document.getElementById("oLevel").textContent = level;
+  renderMenu();
+  show("over");
+  setBottomButtons();
+  maybeOfferHomeScreen();
+}
+
+function pauseGame() { if (state !== "playing") return; state = "paused"; show("pausedScreen"); haptic.impact("soft"); }
+function resumeGame() { state = "playing"; show(null); last = performance.now(); haptic.impact("soft"); }
+function toMenu() {
+  state = "menu"; document.body.classList.remove("playing"); stopTilt();
+  show("menu"); renderMenu(); setBottomButtons();
+}
+function show(id) {
+  ["menu", "over", "pausedScreen"].forEach(s => document.getElementById(s).classList.toggle("hidden", s !== id));
+}
+
+// Home-screen shortcut prompt after the 3rd game (8.0)
+function maybeOfferHomeScreen() {
+  if (!caps["Home screen"] || profile.games !== 3) return;
+  safe(() => tg.checkHomeScreenStatus(st => {
+    if (st === "missed") tg.showConfirm("Enjoying Nebula Drift? Add it to your home screen.", ok => ok && tg.addToHomeScreen());
+  }));
+}
+
+function shareScore() {
+  haptic.impact("light");
+  const text = `I scored ${score} in Nebula Drift (combo x${maxCombo}, level ${level}). Beat that!`;
+  const link = APP_LINK || location.href.split("#")[0];
+  const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+  if (inTG) tg.openTelegramLink(url);
+  else if (navigator.share) navigator.share({ text, url: link }).catch(() => {});
+  else navigator.clipboard && navigator.clipboard.writeText(text).then(() => alert("Copied to clipboard"));
+}
+
+/* ---------------- input ---------------- */
+let dragging = false, lastPt = null;
+cv.addEventListener("pointerdown", e => { dragging = true; lastPt = { x: e.clientX, y: e.clientY }; });
+addEventListener("pointermove", e => {
+  if (!dragging || state !== "playing" || settings.control !== "Drag") return;
+  // relative drag: your finger never covers the orb
+  target.x += (e.clientX - lastPt.x) * 1.35;
+  target.y += (e.clientY - lastPt.y) * 1.35;
+  lastPt = { x: e.clientX, y: e.clientY };
+  clampTarget();
+});
+addEventListener("pointerup", () => dragging = false);
+addEventListener("pointercancel", () => dragging = false);
+addEventListener("keydown", e => {
+  if (e.code === "Space") { e.preventDefault(); state === "playing" ? firePulse() : (state !== "paused" && startGame()); }
+  if (e.code === "Escape") state === "playing" ? pauseGame() : state === "paused" && resumeGame();
+});
+const keys = {};
+addEventListener("keydown", e => keys[e.key] = true);
+addEventListener("keyup", e => keys[e.key] = false);
+function clampTarget() {
+  target.x = Math.max(16, Math.min(W - 16, target.x));
+  target.y = Math.max(60, Math.min(H - 110, target.y)); // bottom strip stays clear for the thumb + PULSE
+}
+
+// Tilt control via Telegram DeviceOrientation (8.0); gamma/beta are radians
+let tiltOn = false;
+function startTilt() {
+  if (!caps["Tilt"]) return;
+  safe(() => tg.DeviceOrientation.start({ refresh_rate: 20 }, ok => {
+    if (!ok) { tg.showAlert("Tilt sensor unavailable, switching to drag."); settings.control = "Drag"; }
+    tiltOn = !!ok;
+  }));
+}
+function stopTilt() { if (tiltOn) { safe(() => tg.DeviceOrientation.stop()); tiltOn = false; } }
+function applyTilt(dt) {
+  if (!tiltOn) return;
+  const g = tg.DeviceOrientation.gamma || 0, b = (tg.DeviceOrientation.beta || 0) - 0.6; // ~35° natural hold
+  target.x += g * 900 * dt; target.y += b * 900 * dt;
+  clampTarget();
+}
+
+document.getElementById("pulse").addEventListener("pointerdown", e => { e.stopPropagation(); firePulse(); });
+function firePulse() {
+  if (state !== "playing" || pulseCd > 0) return;
+  pulseCd = PULSE_CD;
+  rings.push({ x: player.x, y: player.y, r: 10, max: 190, color: "#ff3fa4", w: 6 });
+  shake = 10; haptic.impact("heavy");
+  let killed = 0;
+  ents = ents.filter(e => {
+    if (e.type === "mine" && dist2(e, player) < 190 * 190) { burst(e.x, e.y, TYPES.mine.color, 22, 5); killed++; return false; }
+    return true;
+  });
+  if (killed) { addScore(killed * 15, player.x, player.y - 30, `PULSE +${killed * 15 * Math.max(1, combo)}`); }
+}
+
+/* ---------------- spawning ---------------- */
+function spawn() {
+  const roll = Math.random();
+  const mineChance = Math.min(.22 + level * .05, .55);
+  let type = roll < mineChance ? "mine" : "shard";
+  if (Math.random() < .045) type = ["shield", "magnet", "chrono"][Math.random() * 3 | 0];
+  // enter from a random edge, aim across the field
+  const side = Math.random() * 4 | 0, m = 30;
+  let x, y;
+  if (side === 0) { x = rand(0, W); y = -m; } else if (side === 1) { x = W + m; y = rand(0, H); }
+  else if (side === 2) { x = rand(0, W); y = H + m; } else { x = -m; y = rand(0, H); }
+  const aim = type === "mine" && Math.random() < .35 ? { x: player.x, y: player.y } : { x: rand(W * .2, W * .8), y: rand(H * .2, H * .8) };
+  const sp = rand(70, 120) * (1 + level * .12);
+  const a = Math.atan2(aim.y - y, aim.x - x);
+  ents.push({ type, x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: TYPES[type].r, rot: rand(0, 6.28), age: 0 });
+}
+
+function addScore(base, x, y, label) {
+  const gain = base * Math.max(1, combo);
+  score += gain;
+  parts.push({ text: label || `+${gain}`, x, y, vx: 0, vy: -40, life: 1, max: 1, color: "#fff" });
+  const newLevel = 1 + Math.floor(score / 400);
+  if (newLevel > level) { level = newLevel; banner("LEVEL " + level); haptic.note("success"); rings.push({ x: W / 2, y: H / 2, r: 0, max: Math.hypot(W, H), color: "#a46bff", w: 3 }); }
+}
+
+function burst(x, y, color, n = 14, sp = 3) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, 6.28), v = rand(.4, 1) * sp * 60;
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rand(.4, .9), max: .9, color, size: rand(1.5, 3.5) });
+  }
+}
+
+let bannerTimer;
+function banner(t) {
+  const b = document.getElementById("banner");
+  b.textContent = t; b.classList.remove("show"); void b.offsetWidth; b.classList.add("show");
+  clearTimeout(bannerTimer); bannerTimer = setTimeout(() => b.classList.remove("show"), 1400);
+}
+
+/* ---------------- update ---------------- */
+function update(dtReal) {
+  const slow = buffs.chrono > 0 ? .45 : 1;
+  const dt = dtReal * slow;
+  t0 += dtReal;
+
+  // keyboard (desktop testing)
+  const k = 520 * dtReal;
+  if (keys.ArrowLeft || keys.a) target.x -= k; if (keys.ArrowRight || keys.d) target.x += k;
+  if (keys.ArrowUp || keys.w) target.y -= k; if (keys.ArrowDown || keys.s) target.y += k;
+  clampTarget();
+  applyTilt(dtReal);
+
+  // player spring-follows the target (player is not slowed by chrono)
+  player.vx += (target.x - player.x) * 60 * dtReal; player.vy += (target.y - player.y) * 60 * dtReal;
+  player.vx *= Math.pow(.0008, dtReal); player.vy *= Math.pow(.0008, dtReal);
+  player.x += player.vx * dtReal; player.y += player.vy * dtReal;
+  player.trail.push({ x: player.x, y: player.y }); if (player.trail.length > 22) player.trail.shift();
+  if (player.inv > 0) player.inv -= dtReal;
+
+  for (const b in buffs) if (buffs[b] > 0) buffs[b] = Math.max(0, buffs[b] - dtReal);
+  if (pulseCd > 0) pulseCd = Math.max(0, pulseCd - dtReal);
+  if (comboT > 0) { comboT -= dtReal; if (comboT <= 0) combo = 0; }
+
+  spawnT -= dt;
+  if (spawnT <= 0) { spawn(); spawnT = Math.max(.16, .6 - level * .05) * rand(.6, 1.2); }
+
+  for (const e of ents) {
+    if (buffs.magnet > 0 && e.type === "shard") {
+      const d = Math.sqrt(dist2(e, player)) || 1;
+      if (d < 230) { e.vx += (player.x - e.x) / d * 900 * dt; e.vy += (player.y - e.y) / d * 900 * dt; }
+    }
+    e.x += e.vx * dt; e.y += e.vy * dt; e.rot += dt * (e.type === "mine" ? 2 : 1); e.age += dt;
+    const rr = e.r + player.r;
+    if (dist2(e, player) < rr * rr) { hit(e); e.dead = true; }
+    if (e.age > 2 && (e.x < -80 || e.x > W + 80 || e.y < -80 || e.y > H + 80)) e.dead = true;
+  }
+  ents = ents.filter(e => !e.dead);
+
+  for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .97; p.vy *= .97; p.life -= dt; }
+  parts = parts.filter(p => p.life > 0);
+  for (const r of rings) r.r += (r.max - r.r) * 6 * dt + 60 * dt;
+  rings = rings.filter(r => r.r < r.max * .98);
+  shake *= Math.pow(.004, dtReal); flash = Math.max(0, flash - dtReal * 3);
+  updateHud();
+}
+
+function hit(e) {
+  if (state === "dying") return;
+  const c = TYPES[e.type].color;
+  if (e.type === "shard") {
+    combo = Math.min(combo + 1, 20); comboT = 1.6; maxCombo = Math.max(maxCombo, combo); shards++;
+    addScore(10, e.x, e.y - 14);
+    burst(e.x, e.y, c, 10, 2.5);
+    combo % 5 === 0 ? haptic.impact("medium") : haptic.impact("light");
+    if (combo % 5 === 0) banner("COMBO x" + combo);
+  } else if (e.type === "mine") {
+    burst(e.x, e.y, c, 26, 5); shake = 14;
+    if (player.inv > 0) return;
+    if (buffs.shield > 0) {
+      buffs.shield = 0; player.inv = .8; haptic.impact("rigid");
+      rings.push({ x: player.x, y: player.y, r: 14, max: 90, color: "#4d8bff", w: 4 });
+      return;
+    }
+    lives--; combo = 0; comboT = 0; player.inv = 1.4; flash = 1;
+    haptic.note("error");
+    if (lives <= 0) { burst(player.x, player.y, "#ffffff", 60, 7); setTimeout(endGame, 600); state = "dying"; }
+  } else {
+    buffs[e.type] = e.type === "shield" ? 12 : 7;
+    burst(e.x, e.y, c, 18, 3.5);
+    rings.push({ x: e.x, y: e.y, r: 8, max: 70, color: c, w: 3 });
+    banner(e.type.toUpperCase());
+    haptic.note("success");
+  }
+}
+
+/* ---------------- render ---------------- */
+function draw(time) {
+  const sx = shake > .3 ? rand(-shake, shake) : 0, sy = shake > .3 ? rand(-shake, shake) : 0;
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  // nebula background
+  const g = cx.createRadialGradient(W * .3, H * .25, 0, W * .5, H * .5, Math.max(W, H));
+  const hueShift = (level - 1) * 25;
+  g.addColorStop(0, `hsl(${270 + hueShift},70%,16%)`);
+  g.addColorStop(.5, `hsl(${250 + hueShift},70%,8%)`);
+  g.addColorStop(1, "#05030f");
+  cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+  if (buffs && buffs.chrono > 0) { cx.fillStyle = "rgba(164,107,255,.08)"; cx.fillRect(0, 0, W, H); }
+
+  // parallax stars drift with the player
+  const px = player ? (player.x - W / 2) : 0, py = player ? (player.y - H / 2) : 0;
+  for (const s of stars) {
+    const x = ((s.x * W - px * s.z * .08 + time * .006 * s.z) % W + W) % W;
+    const y = ((s.y * H - py * s.z * .08 + time * .02 * s.z) % H + H) % H;
+    cx.globalAlpha = (.35 + .65 * Math.abs(Math.sin(time / 900 + s.tw))) * s.z;
+    cx.fillStyle = "#fff";
+    cx.fillRect(x, y, s.z * 2, s.z * 2);
+  }
+  cx.globalAlpha = 1;
+
+  if (!player || state === "menu") { cx.setTransform(DPR, 0, 0, DPR, 0, 0); return; }
+  cx.translate(sx, sy);
+  cx.globalCompositeOperation = "lighter";
+
+  for (const r of rings) {
+    cx.strokeStyle = r.color; cx.globalAlpha = 1 - r.r / r.max; cx.lineWidth = r.w;
+    cx.beginPath(); cx.arc(r.x, r.y, r.r, 0, 6.283); cx.stroke();
+  }
+  cx.globalAlpha = 1;
+
+  for (const e of ents) drawEnt(e, time);
+
+  // trail
+  const tr = player.trail;
+  for (let i = 1; i < tr.length; i++) {
+    cx.strokeStyle = `rgba(63,243,255,${i / tr.length * .5})`; cx.lineWidth = i / tr.length * player.r * 1.6;
+    cx.beginPath(); cx.moveTo(tr[i - 1].x, tr[i - 1].y); cx.lineTo(tr[i].x, tr[i].y); cx.stroke();
+  }
+
+  // player
+  if (state !== "dying" && !(player.inv > 0 && Math.floor(time / 80) % 2)) {
+    glow(player.x, player.y, player.r * 3.2, "rgba(63,243,255,.55)");
+    cx.fillStyle = "#e9feff"; cx.beginPath(); cx.arc(player.x, player.y, player.r * .7, 0, 6.283); cx.fill();
+    if (buffs.shield > 0) {
+      cx.strokeStyle = "#4d8bff"; cx.lineWidth = 3; cx.globalAlpha = .6 + .4 * Math.sin(time / 120);
+      cx.beginPath(); cx.arc(player.x, player.y, player.r + 10, 0, 6.283); cx.stroke(); cx.globalAlpha = 1;
+    }
+    if (buffs.magnet > 0) {
+      cx.strokeStyle = "rgba(255,210,63,.25)"; cx.setLineDash([4, 8]); cx.lineWidth = 1.5;
+      cx.beginPath(); cx.arc(player.x, player.y, 230, time / 600, time / 600 + 6.283); cx.stroke(); cx.setLineDash([]);
+    }
+  }
+
+  // particles + floating text
+  for (const p of parts) {
+    cx.globalAlpha = Math.max(0, p.life / p.max);
+    if (p.text) {
+      cx.globalCompositeOperation = "source-over";
+      cx.fillStyle = p.color; cx.font = "800 15px system-ui"; cx.textAlign = "center"; cx.fillText(p.text, p.x, p.y);
+      cx.globalCompositeOperation = "lighter";
+    } else { cx.fillStyle = p.color; cx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size); }
+  }
+  cx.globalAlpha = 1; cx.globalCompositeOperation = "source-over";
+  if (flash > 0) { cx.fillStyle = `rgba(255,69,89,${flash * .3})`; cx.fillRect(-20, -20, W + 40, H + 40); }
+}
+
+function glow(x, y, r, color) {
+  const g = cx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, color); g.addColorStop(1, "rgba(0,0,0,0)");
+  cx.fillStyle = g; cx.beginPath(); cx.arc(x, y, r, 0, 6.283); cx.fill();
+}
+
+function drawEnt(e, time) {
+  const c = TYPES[e.type].color;
+  glow(e.x, e.y, e.r * 2.6, c + "88");
+  cx.save(); cx.translate(e.x, e.y); cx.rotate(e.rot);
+  cx.fillStyle = c; cx.strokeStyle = c; cx.lineWidth = 2;
+  if (e.type === "shard") {
+    cx.beginPath(); cx.moveTo(0, -e.r); cx.lineTo(e.r * .6, 0); cx.lineTo(0, e.r); cx.lineTo(-e.r * .6, 0); cx.closePath(); cx.fill();
+  } else if (e.type === "mine") {
+    cx.beginPath();
+    for (let i = 0; i < 16; i++) { const rr = i % 2 ? e.r * .55 : e.r; const a = i / 16 * 6.283; cx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+    cx.closePath(); cx.fill();
+    cx.fillStyle = Math.sin(time / 150) > 0 ? "#fff" : "#400"; cx.beginPath(); cx.arc(0, 0, 3, 0, 6.283); cx.fill();
+  } else {
+    cx.beginPath(); cx.arc(0, 0, e.r, 0, 6.283); cx.stroke();
+    cx.fillStyle = "#fff"; cx.font = "800 11px system-ui"; cx.textAlign = "center"; cx.textBaseline = "middle"; cx.rotate(-e.rot);
+    cx.fillText({ shield: "S", magnet: "M", chrono: "C" }[e.type], 0, 1);
+  }
+  cx.restore();
+}
+
+/* ---------------- HUD ---------------- */
+const $ = id => document.getElementById(id);
+let hudCache = "";
+function updateHud() {
+  const b = Object.entries(buffs).filter(([, v]) => v > 0);
+  const key = [score, combo, lives, level, b.map(([k, v]) => k + Math.ceil(v)).join(), Math.ceil(pulseCd * 10)].join("|");
+  if (key === hudCache) return; hudCache = key;
+  $("score").textContent = score;
+  $("combo").textContent = combo > 1 ? `COMBO x${combo}` : "";
+  $("lives").textContent = "♥".repeat(Math.max(0, lives)) + "♡".repeat(Math.max(0, 3 - lives));
+  $("level").textContent = "LEVEL " + level;
+  $("buffs").innerHTML = b.map(([k, v]) => `<span class="buff" style="color:${TYPES[k].color}">${k} ${Math.ceil(v)}s</span>`).join("");
+  $("pulseRing").style.strokeDashoffset = (213.6 * pulseCd / PULSE_CD).toFixed(1);
+  $("pulse").classList.toggle("ready", pulseCd === 0);
+}
+
+/* ---------------- loop ---------------- */
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
+  if (state === "playing" || state === "dying") update(dt);
+  draw(now);
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- wire up browser buttons ---------------- */
+$("bPlay").onclick = startGame;
+$("bAgain").onclick = startGame;
+$("bShare").onclick = shareScore;
+$("bHome").onclick = toMenu;
+$("bResume").onclick = resumeGame;
+$("bQuit").onclick = toMenu;
+// haptics toggle is respected globally
+for (const k of Object.keys(haptic)) { const f = haptic[k]; haptic[k] = a => settings.haptics && f(a); }
+
+setupTelegram();
+detectCaps();
+loadProfile();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
