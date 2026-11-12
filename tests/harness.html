@@ -1,0 +1,176 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ORBIT widget harness</title>
+<!--
+  Browser stand-in for the Telegram app around widget.html (see .agents/widgets.md, "A first look in a browser").
+  Serve the repo root over http (fetch needs it), then open /tests/harness.html:
+
+    python3 -m http.server 8000      # from the repo root
+    http://localhost:8000/tests/harness.html?theme=dark
+
+  URL params:
+    theme=light|dark        chat palette (default light)
+    chat={"best":120,"streak":3,"c":250}   initial chat state (JSON), default none
+    preview=1 / forward=1   inline-results preview / forwarded copy (no requests, attract screen)
+    w=320                   bubble width in px (default 320)
+    delay=300               fake bot answer delay in ms
+    err=CODE                every request rejects with CODE (e.g. FAILED, TIMEOUT)
+    errs=CODE               only the first score submission rejects with CODE (e.g. RATE_LIMITED)
+    count=1                 count canvas calls per animation frame on the visible canvas
+
+  QA helpers on window.TelegramWidget:
+    _theme('dark'|'light')  switch the palette and fire themeChanged
+    _chat({...})            replace chatData and fire chatDataChanged
+    _visible(false|true)    toggle document.hidden + visibilitychange + (de)activated
+    _log                    requests, haptics and links the widget made
+  With count=1: window.__canvas = { frames: [{n, t}], max, avg() }
+-->
+<script>
+function standin(cfg) {
+  const themes = {
+    light: { bg_color: '#ffffff', text_color: '#000000', hint_color: '#707579', link_color: '#3390ec',
+      button_color: '#3390ec', button_text_color: '#ffffff', secondary_bg_color: '#f1f1f4',
+      accent_text_color: '#3390ec', subtitle_text_color: '#707579', destructive_text_color: '#e53935',
+      section_bg_color: '#ffffff', section_header_text_color: '#3390ec', section_separator_color: '#e7e7e7',
+      header_bg_color: '#ffffff', bottom_bar_bg_color: '#ffffff' },
+    dark: { bg_color: '#182533', text_color: '#f5f5f5', hint_color: '#708499', link_color: '#6ab3f3',
+      button_color: '#5288c1', button_text_color: '#ffffff', secondary_bg_color: '#131c26',
+      accent_text_color: '#6ab3f3', subtitle_text_color: '#708499', destructive_text_color: '#ec3942',
+      section_bg_color: '#182533', section_header_text_color: '#6ab3f3', section_separator_color: '#2b3a4a',
+      header_bg_color: '#17212b', bottom_bar_bg_color: '#17212b' },
+  };
+  const backdrop = { light: '#cfdbe6', dark: '#0e1621' };
+  const root = document.documentElement, handlers = {}, log = [];
+  const note = (kind, v) => { log.push({ t: Math.round(performance.now()), kind, v }); console.log('[tw]', kind, v ?? ''); };
+  const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const today = ymd(new Date()), yesterday = ymd(new Date(Date.now() - 864e5));
+
+  // fake bot: same protocol as bot.py
+  const chat = cfg.chat || {};
+  const daily = [['Ann', 640], ['Bo', 410], ['Cy', 220]];
+  const me = { b: chat.best | 0, d: 0, k: chat.streak | 0, played: false };
+  let errs = cfg.errs;
+  function board(extra) {
+    const all = daily.concat(me.d ? [['Test', me.d]] : []).sort((a, b) => b[1] - a[1]);
+    return Object.assign({}, extra, { t: all.slice(0, 5), n: all.length,
+      r: me.d ? all.findIndex(e => e[0] === 'Test') + 1 : 0, d: me.d, b: me.b, k: me.k });
+  }
+  function bot(data) {
+    if (data === 'h') return board();
+    const m = /^s:([de]):(\d{8}):(\d{1,7}):(\d{1,5})$/.exec(data);
+    if (!m) return board({ e: 'bad' });
+    if (m[2] !== today && m[2] !== yesterday) return board({ e: 'date' });
+    const s = +m[3];
+    if (s > 100000 || +m[4] * 25 > s) return board({ e: 'score' });
+    if (!me.played) { me.k++; me.played = true; }
+    if (m[1] === 'd' && s > me.d) me.d = s;
+    if (s > me.b) {
+      me.b = s;
+      setTimeout(() => tw._chat(Object.assign({}, chat, { best: me.b, streak: me.k })), 150);
+    }
+    return board();
+  }
+  const fail = code => Object.assign(new Error(code), { name: 'WidgetRequestError', code });
+  let busy = false;
+
+  const tw = {
+    profile: 1, isProfileAtLeast: n => typeof n === 'number' && n <= 1,
+    colorScheme: 'light', themeParams: {}, isActive: true,
+    isPreview: !!cfg.preview, isForward: !!cfg.forward,
+    chatType: cfg.preview || cfg.forward ? null : 'private',
+    viewer: cfg.preview || cfg.forward ? null : { id: 1, first_name: 'Test' },
+    chatData: cfg.chat && !cfg.forward ? JSON.stringify(cfg.chat) : null, publicData: null, wallet: null,
+    contentSafeAreaInset: Object.freeze({ top: 0, right: 0, bottom: 0, left: 0, cornerLeft: 0, cornerRight: 0 }),
+    HapticFeedback: {
+      impactOccurred(s) { if (!['light', 'medium', 'heavy', 'rigid', 'soft'].includes(s)) throw new TypeError(s); note('impact', s); return this; },
+      notificationOccurred(s) { if (!['error', 'success', 'warning'].includes(s)) throw new TypeError(s); note('notification', s); return this; },
+      selectionChanged() { note('selection'); return this; },
+    },
+    onEvent(t, f) { (handlers[t] = handlers[t] || []).push(f); },
+    offEvent(t, f) { handlers[t] = (handlers[t] || []).filter(g => g !== f); },
+    ready() { note('ready'); }, setResizeAnchor() {}, watchPublicData() {}, unwatchPublicData() {},
+    openLink: u => note('openLink', u), openTelegramLink: u => note('openTelegramLink', u), copyText: t => note('copyText', t),
+    request(data) {
+      if (typeof data !== 'string' || !data.length || new TextEncoder().encode(data).length > 64) throw new TypeError('request data must be 1-64 bytes');
+      note('request', data);
+      if (cfg.preview || cfg.forward) return Promise.reject(fail('NOT_ALLOWED'));
+      if (busy) return Promise.reject(fail('BUSY'));
+      busy = true;
+      return new Promise((res, rej) => setTimeout(() => {
+        busy = false;
+        if (cfg.err) return rej(fail(cfg.err));
+        if (errs && data.startsWith('s:')) { const c = errs; errs = null; return rej(fail(c)); }
+        const result = JSON.stringify(bot(data));
+        note('answer', result);
+        res(Object.freeze({ result }));
+      }, cfg.delay));
+    },
+    // QA helpers (not part of the real API)
+    _log: log,
+    _fire(t) { (handlers[t] || []).forEach(f => f.call(tw)); },
+    _theme(name) {
+      const p = themes[name];
+      for (const k in p) root.style.setProperty('--tg-theme-' + k.replace(/_/g, '-'), p[k]);
+      root.style.setProperty('--tg-color-scheme', name);
+      root.style.setProperty('--chat-backdrop', backdrop[name]);
+      root.style.colorScheme = name;
+      tw.colorScheme = name;
+      tw.themeParams = Object.freeze(Object.assign({}, p));
+      tw._fire('themeChanged');
+    },
+    _chat(obj) { tw.chatData = obj == null ? null : JSON.stringify(obj); tw._fire('chatDataChanged'); },
+    _visible(v) {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => !v });
+      tw.isActive = !!v;
+      document.dispatchEvent(new Event('visibilitychange'));
+      tw._fire(v ? 'activated' : 'deactivated');
+    },
+  };
+  window.TelegramWidget = tw;
+  tw._theme(cfg.theme === 'dark' ? 'dark' : 'light');
+
+  if (cfg.count) {
+    const P = CanvasRenderingContext2D.prototype;
+    let n = 0;
+    const counted = ctx => ctx.canvas && ctx.canvas.isConnected;
+    for (const k of Object.getOwnPropertyNames(P)) {
+      const d = Object.getOwnPropertyDescriptor(P, k);
+      if (k === 'constructor' || k === 'canvas') continue;
+      if (typeof d.value === 'function') {
+        const f = d.value;
+        P[k] = function (...a) { if (counted(this)) n++; return f.apply(this, a); };
+      } else if (d.set) {
+        const s = d.set;
+        Object.defineProperty(P, k, { configurable: true, enumerable: d.enumerable, get: d.get, set(v) { if (counted(this)) n++; s.call(this, v); } });
+      }
+    }
+    const stats = window.__canvas = { frames: [], get max() { return Math.max(0, ...this.frames.map(f => f.n)); },
+      avg() { return this.frames.reduce((a, f) => a + f.n, 0) / (this.frames.length || 1); } };
+    const raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = cb => raf(t => { n = 0; cb(t); if (n) stats.frames.push({ n, t: Math.round(t) }); });
+  }
+}
+
+(async () => {
+  const q = new URLSearchParams(location.search);
+  let chat = null;
+  try { chat = q.get('chat') ? JSON.parse(q.get('chat')) : null; } catch (e) { console.error('bad chat JSON', e); }
+  const cfg = {
+    theme: q.get('theme') || 'light', chat, preview: q.get('preview') === '1', forward: q.get('forward') === '1',
+    delay: +(q.get('delay') || 300), err: q.get('err'), errs: q.get('errs'), count: q.get('count') === '1',
+  };
+  const w = +(q.get('w') || 320);
+  const widget = await (await fetch('../widget.html', { cache: 'no-store' })).text();
+  const pre =
+    '<!doctype html><meta charset="utf-8"><title>ORBIT widget harness</title>' +
+    '<style>html{background:var(--chat-backdrop);padding:24px;font:15px/1.35 system-ui,sans-serif}' +
+    'body{width:' + w + 'px;box-sizing:border-box;margin:0;padding:8px 12px;background:var(--tg-theme-bg-color);' +
+    'color:var(--tg-theme-text-color);border-radius:16px;overflow:hidden}' +
+    'button{font:inherit;background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color);' +
+    'border:0;border-radius:8px;padding:8px 14px;cursor:pointer}</style>' +
+    '<script>(' + standin.toString() + ')(' + JSON.stringify(cfg) + ')<\/script>';
+  document.open();
+  document.write(pre + widget);
+  document.close();
+})();
+</script>

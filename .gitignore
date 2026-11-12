@@ -2,3 +2,4 @@
 __pycache__/
 scores.json
 *.tmp
+tests/__pycache__/
