@@ -196,7 +196,7 @@ const store = {
 
 const COLORS = { bg: "#07041a" };
 // After registering the app with @BotFather (/newapp), put its direct link here so shares open the game.
-const APP_LINK = ""; // e.g. "https://t.me/YourBot/drift"
+const APP_LINK = "https://t.me/fameOfBot"; // e.g. "https://t.me/YourBot/drift"
 
 function setupTelegram() {
   document.body.classList.toggle("tg", inTG);
@@ -446,7 +446,8 @@ function shareScore() {
   const text = `I scored ${score} in Nebula Drift (combo x${maxCombo}, level ${level}). Beat that!`;
   const link = APP_LINK || location.href.split("#")[0];
   const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
-  if (inTG) tg.openTelegramLink(url);
+  if (!inTG && window.TelegramGameProxy && typeof TelegramGameProxy.shareScore === "function") TelegramGameProxy.shareScore(); // opened from a game card
+  else if (inTG) tg.openTelegramLink(url);
   else if (navigator.share) navigator.share({ text, url: link }).catch(() => {});
   else navigator.clipboard && navigator.clipboard.writeText(text).then(() => alert("Copied to clipboard"));
 }
