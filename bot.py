@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Telegram bot for Nebula Drift (long polling, standard library only).
 
-    BOT_TOKEN=...  GAME_URL=https://...  [GAME_SHORT_NAME=nebula]  python3 bot.py
+    python3 bot.py        # reads BOT_TOKEN, GAME_URL[, GAME_SHORT_NAME] from env or ./.env
 
-Values are read from the environment, falling back to ./.env.
+Two ways to play:
+  - In the message: /start or /play sends widget.html as a Bot API 10.4 widget,
+    a game that runs inside the chat bubble. The widget asks the bot for the
+    leaderboard ("hi") and submits scores ("s:<n>"); the bot keeps them in
+    scores.json and writes the player's best into the widget's chat state.
+  - Full screen: the menu button and /full open index.html as a Mini App.
+  - /game posts a classic game card if GAME_SHORT_NAME is set (@BotFather /newgame).
 
-What it does
-  - Sets the chat menu button ("Play") so the game opens from the input bar.
-  - /start, /play  -> message with an inline "Play" button that opens the Mini App.
-  - /game          -> a Telegram game card (needs GAME_SHORT_NAME from @BotFather /newgame);
-                      the Play button on the card opens GAME_URL. Game cards also work in groups.
+/start c<score> (from a "Challenge" share link) sends a widget that shows
+"beat <score>".
 """
 
 from __future__ import annotations
@@ -22,9 +25,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+HERE = Path(__file__).resolve().parent
+
 
 def load_env() -> None:
-    env = Path(__file__).with_name(".env")
+    env = HERE / ".env"
     if env.exists():
         for line in env.read_text().splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
@@ -39,6 +44,9 @@ GAME_SHORT_NAME = os.environ.get("GAME_SHORT_NAME", "")
 if not TOKEN or not GAME_URL:
     sys.exit("BOT_TOKEN and GAME_URL are required (env or .env)")
 API = f"https://api.telegram.org/bot{TOKEN}/"
+WIDGET_HTML = (HERE / "widget.html").read_text(encoding="utf-8")
+DB_PATH = HERE / "scores.json"
+MAX_SCORE = 200_000  # anything above is not a real run
 
 
 def call(method: str, **params):
@@ -54,60 +62,128 @@ def call(method: str, **params):
     return None
 
 
-PLAY_KB = {"inline_keyboard": [[{"text": "🚀 Play Nebula Drift", "web_app": {"url": GAME_URL}}]]}
-
-WELCOME = (
-    "<b>NEBULA DRIFT</b>\n"
-    "Steer a glowing orb through the nebula.\n\n"
-    "💎 shards = points (chain them for combos)\n"
-    "💥 mines = lose a life\n"
-    "🛡 shield · 🧲 magnet · ⏳ chrono power-ups\n"
-    "⚡ PULSE blasts nearby mines\n\n"
-    "Best score and daily streak sync across your devices."
-)
+# ---------------- scores ----------------
+def load_db() -> dict:
+    try:
+        return json.loads(DB_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
-def setup() -> None:
-    call("setMyCommands", commands=[
-        {"command": "play", "description": "Play Nebula Drift"},
-        {"command": "game", "description": "Post a game card (works in groups)"},
-    ])
-    call("setChatMenuButton", menu_button={"type": "web_app", "text": "Play", "web_app": {"url": GAME_URL}})
-    call("setMyShortDescription", short_description="Neon arcade: grab shards, chain combos, dodge mines.")
-    call("setMyDescription", description="Nebula Drift: a neon one-thumb arcade game that runs right inside Telegram. Tap Start, then Play.")
+DB = load_db()
+DB.setdefault("users", {})  # uid -> {"n": first name, "b": best}
+DB.setdefault("msgs", {})   # "chat:msg" -> challenge score shown in that widget
+
+
+def save_db() -> None:
+    tmp = DB_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(DB))
+    tmp.replace(DB_PATH)
+
+
+def user_best(uid: int) -> int:
+    return DB["users"].get(str(uid), {}).get("b", 0)
+
+
+def board(uid: int) -> str:
+    ranked = sorted(DB["users"].items(), key=lambda kv: -kv[1]["b"])
+    rank = next((i + 1 for i, (k, _) in enumerate(ranked) if k == str(uid)), 0)
+    top = [[v["n"][:12], v["b"]] for _, v in ranked[:5] if v["b"] > 0]
+    return json.dumps({"b": user_best(uid), "r": rank, "t": top}, ensure_ascii=False)
+
+
+# ---------------- sending ----------------
+PLAY_KB = {"inline_keyboard": [[{"text": "⛶ Full-screen version", "web_app": {"url": GAME_URL}}]]}
+CAPTION = "NEBULA DRIFT · drag ←→ to steer, grab 💎, dodge 💥, ⚡ blasts mines."
+
+
+def send_widget(chat_id: int, uid: int, challenge: int = 0) -> None:
+    state = {"b": user_best(uid)}
+    if challenge:
+        state["c"] = challenge
+    msg = call("sendWidget", chat_id=chat_id, html=WIDGET_HTML, chat_data=json.dumps(state),
+               caption=CAPTION + (f"\nFriend's challenge: beat {challenge}!" if challenge else ""),
+               allow_queries=True, reply_markup=PLAY_KB)
+    if msg is None:  # widgets refused: fall back to the Mini App
+        call("sendMessage", chat_id=chat_id, text="Play Nebula Drift:", reply_markup=PLAY_KB)
+    elif challenge:
+        DB["msgs"][f"{chat_id}:{msg['message_id']}"] = challenge
+        save_db()
 
 
 def send_game_card(chat_id: int) -> None:
     if not GAME_SHORT_NAME:
-        call("sendMessage", chat_id=chat_id, text="Game cards aren't set up yet (needs /newgame in @BotFather). Use the button below:",
+        call("sendMessage", chat_id=chat_id, text="Game cards aren't set up yet (needs /newgame in @BotFather).",
              reply_markup=PLAY_KB)
         return
     call("sendGame", chat_id=chat_id, game_short_name=GAME_SHORT_NAME)
 
 
+def setup() -> None:
+    call("setMyCommands", commands=[
+        {"command": "play", "description": "Play in the chat (widget)"},
+        {"command": "full", "description": "Full-screen version (Mini App)"},
+        {"command": "top", "description": "Leaderboard"},
+    ])
+    call("setChatMenuButton", menu_button={"type": "web_app", "text": "Play", "web_app": {"url": GAME_URL}})
+    call("setMyShortDescription", short_description="Neon arcade you play right inside the chat.")
+    call("setMyDescription", description="Nebula Drift: a neon arcade game that runs inside the message. "
+         "Tap Start, then drag left and right.")
+
+
+# ---------------- updates ----------------
+def on_widget_query(q: dict) -> None:
+    uid, data = q["from"]["id"], q.get("data", "")
+    if data.startswith("s:") and data[2:].isdigit():
+        score = int(data[2:])
+        if user_best(uid) < score <= MAX_SCORE:
+            DB["users"][str(uid)] = {"n": q["from"].get("first_name", "?"), "b": score}
+            save_db()
+            call("answerWidgetQuery", widget_query_id=q["id"], data=board(uid))
+            if "chat" in q:  # keep the best in this message's state (survives device switches)
+                state = {"b": score}
+                ch = DB["msgs"].get(f"{q['chat']['id']}:{q['message_id']}")
+                if ch:
+                    state["c"] = ch
+                call("editMessageWidgetData", chat_id=q["chat"]["id"], message_id=q["message_id"],
+                     chat_data=json.dumps(state))
+            return
+    call("answerWidgetQuery", widget_query_id=q["id"], data=board(uid))
+
+
 def handle(u: dict) -> None:
+    if "widget_query" in u:
+        on_widget_query(u["widget_query"])
+        return
     if "callback_query" in u:
         q = u["callback_query"]
-        if q.get("game_short_name"):
-            call("answerCallbackQuery", callback_query_id=q["id"], url=GAME_URL)
-        else:
-            call("answerCallbackQuery", callback_query_id=q["id"])
+        extra = {"url": GAME_URL} if q.get("game_short_name") else {}
+        call("answerCallbackQuery", callback_query_id=q["id"], **extra)
         return
 
     msg = u.get("message")
     if not msg or "text" not in msg:
         return
-    chat = msg["chat"]["id"]
-    cmd = msg["text"].split()[0].split("@")[0].lower()
+    chat, uid = msg["chat"]["id"], msg["from"]["id"]
+    parts = msg["text"].split()
+    cmd = parts[0].split("@")[0].lower()
     private = msg["chat"]["type"] == "private"
 
     if cmd in ("/start", "/play"):
+        arg = parts[1] if len(parts) > 1 else ""
+        challenge = int(arg[1:]) if arg[:1] == "c" and arg[1:].isdigit() else 0
         if private:
-            call("sendMessage", chat_id=chat, text=WELCOME, parse_mode="HTML", reply_markup=PLAY_KB)
-        else:  # web_app inline buttons only work in private chats
+            send_widget(chat, uid, min(challenge, MAX_SCORE))
+        else:  # widgets are private-chat only in production for now
             send_game_card(chat)
+    elif cmd == "/full":
+        call("sendMessage", chat_id=chat, text="Full-screen Nebula Drift:", reply_markup=PLAY_KB)
     elif cmd == "/game":
         send_game_card(chat)
+    elif cmd == "/top":
+        b = json.loads(board(uid))
+        lines = [f"{i + 1}. {n} — {s}" for i, (n, s) in enumerate(b["t"])] or ["No scores yet."]
+        call("sendMessage", chat_id=chat, text="🏆 Nebula Drift\n" + "\n".join(lines))
 
 
 def main() -> None:
@@ -117,7 +193,7 @@ def main() -> None:
     offset = 0
     while True:
         updates = call("getUpdates", offset=offset, timeout=50,
-                       allowed_updates=["message", "callback_query"])
+                       allowed_updates=["message", "callback_query", "widget_query"])
         if updates is None:
             time.sleep(5)
             continue

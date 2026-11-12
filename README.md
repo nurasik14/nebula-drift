@@ -33,3 +33,9 @@ Each feature is turned on only after a version check, so older clients still wor
 cp .env.example .env   # fill in BOT_TOKEN
 python3 bot.py
 ```
+
+## In-message widget (Bot API 10.4)
+
+`widget.html` is a cut-down version (about 3.8 KB compressed, limit 4 KB) that runs **inside the chat bubble** as a [Telegram widget](https://core.telegram.org/bots/widgets). The orb moves only left and right, because vertical drags always scroll the chat. The widget asks the bot for the leaderboard and submits scores with `TelegramWidget.request()`. The bot answers with `answerWidgetQuery` and keeps each player's best in the widget's chat state.
+
+Widgets run in Telegram's QuickJS sandbox, and the Telegram app replays every canvas call. So the widget pre-renders its sprites and starfield into offscreen canvases, draws each frame with about 40 calls, and runs at 30 fps while playing (about 8 fps when idle).

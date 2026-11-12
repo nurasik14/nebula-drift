@@ -1,0 +1,87 @@
+<style>
+body{margin:0;padding:10px 12px}
+#h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+#h b{font:800 16px ui-rounded,system-ui;letter-spacing:2px;color:var(--tg-theme-accent-text-color)}
+#s{font:700 15px ui-monospace,monospace;font-variant-numeric:tabular-nums}
+#s i{font-style:normal;font-size:12px;color:var(--tg-theme-hint-color)}
+canvas{display:block;width:100%;height:280px;border-radius:12px;background:linear-gradient(#1d0b45,#05030f);touch-action:none}
+#m,#l{font-size:13px;color:var(--tg-theme-hint-color);margin-top:6px;min-height:1.3em}
+#l{color:var(--tg-theme-text-color)}
+#r{display:flex;gap:6px;margin-top:8px}
+#r button{flex:1}
+</style>
+<div id="h"><b>NEBULA DRIFT</b><span id="s"></span></div>
+<canvas id="c"></canvas>
+<div id="m"></div><div id="l"></div>
+<div id="r"><button id="p">Play</button><button id="q" disabled>⚡ Pulse</button><button id="f">Challenge</button></div>
+<script>
+const T=window.TelegramWidget,$=i=>document.getElementById(i),c=$('c'),x=c.getContext('2d'),H=280,R=Math.random,
+K={g:'#3ff3ff',x:'#ff4559',s:'#4d8bff',m:'#ffd23f',c:'#a46bff'},PY=H-34,IX={g:0,x:1,s:2,m:3,c:4,p:5},Z=48,
+A=document.createElement('canvas'),a=A.getContext('2d'),B=document.createElement('canvas'),b=B.getContext('2d');
+let W=300,D=2,st=0,P,E=[],Q=[],O=[],sc=0,li=3,lv=1,co=0,ct=0,mc=0,pc=0,bf={},sh=0,nx=0,L=null,pend=0,lt=0,ld=0;
+function ls(k,v){try{if(v==null)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){}}
+function hp(f,a){try{T.HapticFeedback[f](a)}catch(e){}}
+let cd={};try{cd=JSON.parse(T&&T.chatData)||{}}catch(e){}
+let best=Math.max(+ls('b')||0,cd.b||0);
+function msg(t){$('m').textContent=t}
+function ui(){$('s').innerHTML=sc+' <i>best '+best+'</i>'}
+function ar(g,X,Y,r){g.beginPath();g.arc(X,Y,r,0,7);g.fill()}
+function sz(){W=c.getBoundingClientRect().width||300;D=Math.min(2,devicePixelRatio||1);c.width=B.width=W*D;c.height=B.height=H*D;
+b.setTransform(D,0,0,D,0,0);b.fillStyle='#fff';for(let i=0;i<40;i++){b.globalAlpha=.25+R()*.6;b.fillRect(R()*W,R()*H,1.5,1.5)}
+A.width=Z*6*D;A.height=Z*D;a.setTransform(D,0,0,D,0,0);a.textAlign='center';a.font='700 11px system-ui';
+'gxsmcp'.split('').forEach((t,i)=>{let X=i*Z+24,k=K[t]||K.g;a.fillStyle=k;a.globalAlpha=.22;ar(a,X,24,t=='p'?24:16);a.globalAlpha=1;
+if(t=='g'){a.beginPath();a.moveTo(X,16);a.lineTo(X+5,24);a.lineTo(X,32);a.lineTo(X-5,24);a.fill()}
+else if(t=='x'){a.beginPath();for(let j=0;j<12;j++){let r=j%2?6:12,q=j*.5236;a.lineTo(X+Math.cos(q)*r,24+Math.sin(q)*r)}a.fill();a.fillStyle='#fff';ar(a,X,24,2.5)}
+else if(t=='p'){a.globalAlpha=.5;ar(a,X,24,15);a.globalAlpha=1;a.fillStyle='#eaffff';ar(a,X,24,9)}
+else{ar(a,X,24,10);a.fillStyle='#000';a.fillText(t.toUpperCase(),X,28)}})}
+function sp_(t,X,Y){x.drawImage(A,IX[t]*Z*D,0,Z*D,Z*D,X-24,Y-24,Z,Z)}
+function go(){P={x:W/2,t:W/2,i:0};E=[];Q=[];O=[];sc=0;li=3;lv=1;co=0;ct=0;mc=0;pc=0;bf={s:0,m:0,c:0};st=1;nx=0;
+msg('Drag ←→ to steer · grab 💎 · dodge 💥');hp('impactOccurred','medium');ui()}
+function sp(){let t=R()<Math.min(.25+lv*.05,.55)?'x':'g';if(R()<.05)t='smc'[R()*3|0];
+E.push({t,x:14+R()*(W-28),y:-12,v:(60+R()*50)*(1+lv*.12),h:(R()-.5)*40})}
+function bst(X,Y,k,n){for(let i=0;i<n;i++){let q=R()*7,v=40+R()*120;Q.push({x:X,y:Y,u:Math.cos(q)*v,w:Math.sin(q)*v,l:.3+R()*.4,k})}}
+function add(n){sc+=n*Math.max(1,co);let v=1+(sc/400|0);if(v>lv){lv=v;msg('LEVEL '+lv);hp('notificationOccurred','success');O.push({x:W/2,y:H/2,r:0,m:W,k:K.c})}ui()}
+function hit(o){bst(o.x,o.y,K[o.t],6);
+if(o.t=='g'){co=Math.min(co+1,20);ct=1.6;mc=Math.max(mc,co);add(10);hp('impactOccurred',co%5?'light':'medium')}
+else if(o.t=='x'){sh=8;if(P.i>0)return;if(bf.s){bf.s=0;P.i=.8;hp('impactOccurred','rigid');return}
+li--;co=0;P.i=1.4;hp('notificationOccurred','error');if(li<1)end()}
+else{bf[o.t]=o.t=='s'?12:7;hp('notificationOccurred','success');msg({s:'🛡 Shield 12s',m:'🧲 Magnet 7s',c:'⏳ Chrono 7s'}[o.t])}}
+function pu(){if(st!=1||pc>0)return;pc=6;sh=10;$('q').disabled=true;hp('impactOccurred','heavy');O.push({x:P.x,y:PY,r:8,m:130,k:'#ff3fa4'});let n=0;
+E=E.filter(o=>!(o.t=='x'&&Math.hypot(o.x-P.x,o.y-PY)<130&&(bst(o.x,o.y,K.x,8),++n)));if(n)add(15*n)}
+function rl(r){try{let d=JSON.parse(r.result);if(d.b>best){best=d.b;ls('b',best)}
+$('l').textContent=d.t.length?'🏆 '+d.t.map((p,i)=>(i+1)+'. '+p[0]+' '+p[1]).join(' · ')+(d.r?'  ·  you #'+d.r:''):'🏆 No scores yet. Be the first!';ui()}catch(e){}}
+function sub(){if(!T||!pend)return;let s=pend;T.request('s:'+s).then(r=>{if(pend==s)pend=0;rl(r)},()=>{})}
+function end(){st=2;bst(P.x,PY,'#fff',16);let nb=sc>best;if(nb){best=sc;ls('b',best)}
+msg((nb?'★ NEW BEST · ':'')+'score '+sc+' · combo x'+mc+' · level '+lv);$('p').textContent='Play again';$('p').disabled=false;$('q').disabled=true;pend=sc;sub();ui()}
+function up(d){let e=d*(bf.c>0?.45:1);P.x+=(P.t-P.x)*Math.min(1,d*30);P.i-=d;
+for(let k in bf)bf[k]=Math.max(0,bf[k]-d);if(pc>0&&(pc-=d)<=0)$('q').disabled=false;if(ct>0&&(ct-=d)<=0)co=0;
+if((nx-=e)<=0){sp();nx=Math.max(.2,.7-lv*.05)*(.6+R()*.6)}
+E=E.filter(o=>{if(bf.m>0&&o.t=='g')o.x+=(P.x-o.x)*Math.min(1,e*3);o.y+=o.v*e;o.x+=o.h*e;
+if(st==1&&Math.abs(o.x-P.x)<19&&Math.abs(o.y-PY)<19){hit(o);return 0}return o.y<H+20&&o.x>-20&&o.x<W+20})}
+function dr(t){x.setTransform(D,0,0,D,0,0);x.clearRect(0,0,W,H);let y=t*.012%H;
+x.drawImage(B,0,y-H,W,H);x.drawImage(B,0,y,W,H);
+if(sh>.5)x.translate((R()-.5)*sh,(R()-.5)*sh);sh*=.85;
+if(bf.c>0){x.fillStyle='rgba(164,107,255,.12)';x.fillRect(0,0,W,H)}
+for(const o of E)sp_(o.t,o.x,o.y);
+let f;for(const q of Q){if(q.k!=f)x.fillStyle=f=q.k;x.fillRect(q.x,q.y,3,3)}
+x.lineWidth=3;for(const r of O){x.strokeStyle=r.k;x.beginPath();x.arc(r.x,r.y,r.r,0,7);x.stroke()}
+if(st==1&&!(P.i>0&&(t/80|0)%2)){sp_('p',P.x,PY);
+if(bf.s>0){x.strokeStyle=K.s;x.beginPath();x.arc(P.x,PY,21,0,7);x.stroke()}
+if(bf.m>0){x.strokeStyle=K.m;x.lineWidth=1;x.beginPath();x.arc(P.x,PY,60+t/20%30,0,7);x.stroke()}}
+x.font='700 13px ui-monospace,monospace';x.fillStyle='#fff';x.textAlign='left';
+if(st==1){x.fillText('♥'.repeat(li)+'  L'+lv,10,20);if(co>1){x.textAlign='right';x.fillStyle=K.m;x.fillText('x'+co,W-10,20)}}
+else{if(st){x.fillStyle='rgba(5,3,15,.65)';x.fillRect(-9,-9,W+18,H+18)}x.textAlign='center';x.font='800 22px ui-rounded,system-ui';x.fillStyle=st?K.x:K.g;x.fillText(st?'GAME OVER':'TAP TO PLAY',W/2,H/2-4);
+x.font='13px system-ui';x.fillStyle='#bbb';x.fillText(st?'score '+sc:cd.c?'friend’s challenge: beat '+cd.c:'💎 points · 💥 lose a life · ⚡ blast',W/2,H/2+20)}}
+function lp(t){requestAnimationFrame(lp);if(t-ld<(st==1?31:120))return;ld=t;
+let d=Math.min((t-lt)/1e3,.07);lt=t;if(st)up(d);
+for(const q of Q){q.x+=q.u*d;q.y+=q.w*d;q.l-=d}Q=Q.filter(q=>q.l>0);for(const r of O)r.r+=(r.m-r.r)*5*d+40*d;O=O.filter(r=>r.r<r.m*.97);
+dr(t)}
+function play(){if(st==1)return;if(pend)sub();$('q').disabled=false;$('p').disabled=true;go()}
+c.onclick=play;$('p').onclick=play;$('q').onclick=pu;
+$('f').onclick=()=>{let u='https://t.me/fameOfBot?start=c'+best;try{T.openTelegramLink('https://t.me/share/url?url='+encodeURIComponent(u)+'&text='+encodeURIComponent('Beat my '+best+' in Nebula Drift ⚡'))}catch(e){}};
+c.onpointerdown=e=>{L=e.clientX};c.onpointermove=e=>{if(st==1&&L!=null){P.t=Math.max(12,Math.min(W-12,P.t+(e.clientX-L)*1.6));P.x=P.x*.5+P.t*.5;L=e.clientX}};
+c.onpointerup=c.onpointercancel=()=>{L=null};
+sz();ui();msg(cd.c?'Friend’s challenge: beat '+cd.c+'!':'Tap the field or Play to start.');
+if(T){T.request('hi').then(rl,()=>{});T.onEvent('chatDataChanged',()=>{try{cd=JSON.parse(T.chatData)||{}}catch(e){}});T.ready()}
+requestAnimationFrame(t=>{lt=ld=t;lp(t)});
+</script>
